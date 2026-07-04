@@ -8,7 +8,7 @@ import google.generativeai as genai
 # --- Configuração da Página ---
 st.set_page_config(page_title="Gerador de Ofertas Shopee", page_icon="🛍️", layout="centered")
 
-# --- Credenciais (via st.secrets no Streamlit Cloud) ---
+# --- Credenciais ---
 try:
     SHOPEE_APP_ID = st.secrets["SHOPEE_APP_ID"]
     SHOPEE_APP_SECRET = st.secrets["SHOPEE_APP_SECRET"]
@@ -20,7 +20,7 @@ except KeyError:
 SHOPEE_API_URL = "https://open-api.affiliate.shopee.com.br/graphql"
 
 # --- Configurações Fixas ---
-MIN_DISCOUNT = 0.20 # Desconto mínimo real (20%)
+MIN_DISCOUNT = 0.20
 MIN_COMMISSION = 0.08
 PRODUCTS_PER_KEYWORD = 2
 
@@ -93,7 +93,6 @@ def build_prompt(products):
     for i, p in enumerate(products, start=1):
         price = p.get("priceMin")
         discount_pct = round(float(p.get("priceDiscountRate", 0)))
-        # Pequena sanitização para não quebrar a IA
         safe_name = p['productName'].replace('"', "'").replace("\n", " ")
         lines.append(
             f"{i}. Produto: {safe_name} | Preco: R${price} | Desconto: {discount_pct}% | Link: {p['offerLink']}"
@@ -115,18 +114,20 @@ Responda SOMENTE com JSON válido sem markdown:
 {{"results": ["texto1", "texto2"]}}
 A ordem deve ser a mesma dos produtos recebidos."""
 
-    # Configuração do Gemini
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
     
-    user_msg = build_prompt(products)
-    prompt_completo = f"{SYSTEM_PROMPT}\n\n{user_msg}"
+    prompt_completo = f"{SYSTEM_PROMPT}\n\n{build_prompt(products)}"
+    
+    # Sistema de Fallback: Tenta a rota atualizada, se falhar, usa a rota universal
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        response = model.generate_content(prompt_completo)
+    except Exception:
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt_completo)
     
     try:
-        response = model.generate_content(prompt_completo)
         raw = response.text
-        
-        # Limpeza robusta do JSON (Remove crases do markdown e caracteres invisíveis)
         cleaned = raw.replace("```json", "").replace("```", "").strip()
         cleaned = "".join(c for c in cleaned if ord(c) >= 32 or c in "\n\r\t")
         
@@ -135,7 +136,7 @@ A ordem deve ser a mesma dos produtos recebidos."""
         
         return [r.replace("\\n", "\n") for r in results]
     except Exception as e:
-        raise RuntimeError(f"Erro na IA do Google: {str(e)}")
+        raise RuntimeError(f"Erro na limpeza do texto gerado: {str(e)}")
 
 # --- Interface de Usuário (UI) ---
 st.title("🛍️ Gerador de Ofertas Shopee")
@@ -182,4 +183,3 @@ if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
                         st.code(texto_formatado, language="text")
             except Exception as e:
                 st.error(f"❌ Erro na geração de texto: {e}")
-                
