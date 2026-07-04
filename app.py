@@ -172,7 +172,10 @@ def generate_texts(products, tom_texto):
     if not products: return [], "Nenhuma"
     prompt = f"Você é um copywriter Shopee. Tom: {tom_texto}. Responda APENAS JSON: {{\"results\": [\"texto1\", ...]}}. Use \\n para quebras. Formato: {{emoji}} {{frase}}\\n\\n✨ {{nome}}\\n\\n❌ {{desconto}}% OFF ❌\\n💰 R$ {{preço}}\\n\\n🔗 {{link}}\n\nProdutos:\n"
     for idx, p in enumerate(products, 1):
-        prompt += f"{idx}. {p['productName'][:60]} | R${p['priceMin']} | {int(float(p['priceDiscountRate']))}% OFF | {p['offerLink']}\n"
+        name = p['productName'].strip()
+        if len(name) > 100:
+            name = name[:97] + "..."
+        prompt += f"{idx}. {name} | R${p['priceMin']} | {int(float(p['priceDiscountRate']))}% OFF | {p['offerLink']}\n"
 
     st.session_state.last_errors = []
     
@@ -233,6 +236,10 @@ if st.session_state.history:
         st.session_state.history = []; st.session_state.seen_ids = set(); st.rerun()
     for item in st.session_state.history:
         with st.container():
-            st.markdown(f"""<div class='card'><div style='display: flex; justify-content: space-between;'><div><div class='shopee-orange'>{item['name'][:60]}...</div><div style='margin-top: 8px;'><span class='price-tag'>R$ {format_price(item['price'])}</span> <span style='color: #888; font-size: 0.8em;'>• {item['origin']}</span> <span class='ai-badge'>{item['provider']}</span></div></div><div class='discount-badge'>{item['discount']}% OFF</div></div></div>""", unsafe_allow_html=True)
+            display_name = item['name'].strip()
+            if len(display_name) > 80:
+                display_name = display_name[:77] + "..."
+            st.markdown(f"""<div class='card'><div style='display: flex; justify-content: space-between;'><div><div class='shopee-orange'>{display_name}</div><div style='margin-top: 8px;'><span class='price-tag'>R$ {format_price(item['price'])}</span> <span style='color: #888; font-size: 0.8em;'>• {item['origin']}</span> <span class='ai-badge'>{item['provider']}</span></div></div><div class='discount-badge'>{item['discount']}% OFF</div></div></div>""", unsafe_allow_html=True)
             st.code(item['text'], language="text")
 else: st.info("Gere ofertas acima! ✨")
+        
