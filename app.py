@@ -3,7 +3,6 @@ import time
 import json
 import hashlib
 import requests
-import google.generativeai as genai
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="Gerador de Ofertas Shopee", page_icon="🛍️", layout="centered")
@@ -114,22 +113,40 @@ Responda SOMENTE com JSON válido sem markdown:
 {{"results": ["texto1", "texto2"]}}
 A ordem deve ser a mesma dos produtos recebidos."""
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
     prompt_completo = f"{SYSTEM_PROMPT}\n\n{build_prompt(products)}"
     
+    # Fazendo a requisição HTTP direta, ignorando a biblioteca com erro
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{"parts": [{"text": prompt_completo}]}]
+    }
+    
     try:
-        response = model.generate_content(prompt_completo)
-        raw = response.text
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        # Se der erro HTTP, captura a mensagem real do Google para debug
+        if not r.ok:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
+            
+        data = r.json()
+        
+        # Navega no JSON de resposta do Gemini
+        raw = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        
+        if not raw:
+            raise RuntimeError("A API não retornou texto.")
+            
         cleaned = raw.replace("```json", "").replace("```", "").strip()
         cleaned = "".join(c for c in cleaned if ord(c) >= 32 or c in "\n\r\t")
         
         parsed = json.loads(cleaned)
         results = parsed.get("results", [])
         
-        return [r.replace("\\n", "\n") for r in results]
+        return [res.replace("\\n", "\n") for res in results]
+        
     except Exception as e:
-        raise RuntimeError(f"Erro na geração: {str(e)}")
+        raise RuntimeError(f"Erro ao processar IA: {str(e)}")
 
 # --- Interface de Usuário (UI) ---
 st.title("🛍️ Gerador de Ofertas Shopee")
@@ -175,5 +192,4 @@ if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
                         st.text(texto_formatado)
                         st.code(texto_formatado, language="text")
             except Exception as e:
-                st.error(f"❌ Erro na IA: {e}")
-                
+                st.error(f"❌ Erro: {e}")
