@@ -99,15 +99,12 @@ def shopee_query(query):
         r.raise_for_status()
         data = r.json()
         if data.get("errors"):
-            st.error(f"Erro Shopee API: {data['errors']}")
             return None
         return data.get("data")
-    except Exception as e:
-        st.error(f"Erro de conexão com Shopee: {e}")
+    except Exception:
         return None
 
 def search_products(keyword, limit=50):
-    # Aumentamos o limite para ter mais opções e filtrar dinamicamente
     query = f"""
     {{
       productOfferV2(
@@ -136,8 +133,7 @@ def search_products(keyword, limit=50):
     return []
 
 def classify_origin(product_name, shop_name):
-    """Heurística simples para classificar origem se não houver API direta"""
-    china_terms = ['china', 'internacional', 'cross-border', 'envio internacional', 'importado']
+    china_terms = ['china', 'internacional', 'cross-border', 'envio internacional', 'importado', 'ltd', 'shenzhen', 'guangzhou']
     text = f"{product_name} {shop_name}".lower()
     if any(term in text for term in china_terms):
         return "IMPORTADO"
@@ -152,11 +148,9 @@ def filter_and_pick(products, target_count, origin_filter, min_discount, min_com
         discount = float(p.get("priceDiscountRate") or 0)
         commission = float(p.get("commissionRate") or 0)
         
-        # Filtros básicos
         if discount < min_discount or commission < min_comm:
             continue
             
-        # Filtro de Origem (Heurística)
         origin = classify_origin(p['productName'], p['shopName'])
         if origin_filter != "TODAS":
             if origin_filter == "NACIONAL" and origin != "NACIONAL":
@@ -167,9 +161,7 @@ def filter_and_pick(products, target_count, origin_filter, min_discount, min_com
         p['origin'] = origin
         candidates.append(p)
     
-    # Embaralhar para ser dinâmico
     random.shuffle(candidates)
-    
     selected = candidates[:target_count]
     for s in selected:
         st.session_state.seen_ids.add(s["itemId"])
@@ -179,61 +171,74 @@ def filter_and_pick(products, target_count, origin_filter, min_discount, min_com
 # --- Funções IA (Gemini) ---
 def sanitize_text(text):
     if not text: return ""
-    return re.sub(r'[\x00-\x1F\x7F]', '', text).replace('"', "'").replace('\n', ' ').strip()
+    # Remove caracteres de controle e sanitiza aspas
+    text = re.sub(r'[\x00-\x1F\x7F]', '', text)
+    return text.replace('"', "'").replace('\n', ' ').strip()
 
-def generate_texts_ai(products, tom_texto):
-    if not products:
-        return []
+def generate_texts_in_batches(products, tom_texto, batch_size=4):
+    """Gera textos em lotes menores para evitar erros de limite ou falhas no JSON da IA"""
+    all_texts = []
     
-    SYSTEM_PROMPT = f"""Você é um copywriter especialista em Shopee.
-Crie posts curtos e persuasivos para WhatsApp.
-Tom: {tom_texto}.
-
-Para cada produto, retorne um objeto JSON no array 'results'.
-Use \\n para quebras de linha.
-Formato do texto:
-{{emoji}} {{frase criativa}}\\n\\n✨ {{nome do produto}}\\n\\n❌ Com {{desconto}}% OFF ❌\\n💰 Por apenas R${{preço}}\\n\\n🔗 Link: {{link}}
-
-Retorne APENAS o JSON: {{"results": ["texto1", "texto2"]}}"""
-
-    product_list = []
-    for i, p in enumerate(products, 1):
-        product_list.append(f"{i}. {sanitize_text(p['productName'])} | R${p['priceMin']} | {int(float(p['priceDiscountRate']))}% OFF | {p['offerLink']}")
-    
-    user_msg = "\n".join(product_list)
-    
-    url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {GEMINI_API_KEY}"
-    }
-    payload = {
-        "model": "gemini-1.5-flash",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg}
-        ],
-        "temperature": 0.8 # Um pouco de aleatoriedade
-    }
-    
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=30)
-        r.raise_for_status()
-        res_json = r.json()
-        raw_content = res_json["choices"][0]["message"]["content"]
+    for i in range(0, len(products), batch_size):
+        batch = products[i:i + batch_size]
         
-        # Limpeza robusta de JSON
-        match = re.search(r'\{.*\}', raw_content, re.DOTALL)
-        if match:
-            clean_json = match.group(0)
-            data = json.loads(clean_json)
-            return [t.replace('\\n', '\n') for t in data.get("results", [])]
-        else:
-            st.error("IA não retornou um formato JSON válido.")
-            return []
-    except Exception as e:
-        st.error(f"Erro na IA: {e}")
-        return []
+        SYSTEM_PROMPT = f"""Você é um copywriter especialista em Shopee para WhatsApp.
+Tom: {tom_texto}.
+Crie um post curto e chamativo para cada produto abaixo.
+
+Regras:
+1. Use emojis.
+2. Formato: {{emoji}} {{frase}}\\n\\n✨ {{nome}}\\n\\n❌ {{desconto}}% OFF ❌\\n💰 R$ {{preço}}\\n\\n🔗 {{link}}
+3. Responda APENAS com um JSON no formato: {{"results": ["texto1", "texto2", ...]}}
+4. Use \\n para quebras de linha dentro das strings."""
+
+        product_data = []
+        for idx, p in enumerate(batch, 1):
+            name = sanitize_text(p['productName'])
+            price = p['priceMin']
+            disc = int(float(p['priceDiscountRate']))
+            link = p['offerLink']
+            product_data.append(f"Prod {idx}: {name} | R${price} | {disc}% OFF | {link}")
+        
+        user_msg = "\n".join(product_data)
+        
+        url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {GEMINI_API_KEY}"
+        }
+        payload = {
+            "model": "gemini-1.5-flash",
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg}
+            ],
+            "temperature": 0.9
+        }
+        
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=40)
+            if r.ok:
+                res_json = r.json()
+                content = res_json["choices"][0]["message"]["content"]
+                
+                # Extração robusta do JSON
+                match = re.search(r'\{.*\}', content, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(0))
+                    batch_results = [t.replace('\\n', '\n') for t in data.get("results", [])]
+                    # Garantir que temos o mesmo número de textos que produtos no lote
+                    while len(batch_results) < len(batch):
+                        batch_results.append("⚠️ Erro ao gerar este texto específico.")
+                    all_texts.extend(batch_results[:len(batch)])
+                else:
+                    all_texts.extend(["⚠️ Erro: IA não retornou JSON."] * len(batch))
+            else:
+                all_texts.extend([f"⚠️ Erro HTTP {r.status_code}"] * len(batch))
+        except Exception as e:
+            all_texts.extend([f"⚠️ Erro técnico: {str(e)[:30]}"] * len(batch))
+            
+    return all_texts
 
 # --- UI Principal ---
 st.markdown("<h1 style='text-align: center;'>🛍️ Shopee Fácil</h1>", unsafe_allow_html=True)
@@ -262,25 +267,25 @@ with st.container():
         if not keywords:
             st.warning("Insira pelo menos uma categoria.")
         else:
-            with st.status("Buscando ofertas imperdíveis...", expanded=True) as status:
+            with st.status("Processando...", expanded=True) as status:
                 all_found = []
                 for kw in keywords:
-                    status.write(f"Pesquisando: {kw}")
+                    status.write(f"Buscando produtos: {kw}")
                     prods = search_products(kw)
                     all_found.extend(prods)
                 
                 selected = filter_and_pick(all_found, num_offers, origin, min_disc, min_comm)
                 
                 if not selected:
-                    status.update(label="Nenhum produto novo encontrado com esses filtros.", state="error")
+                    status.update(label="Nenhum produto novo encontrado.", state="error")
                 else:
-                    status.write("Gerando textos criativos...")
-                    textos = generate_texts_ai(selected, tom_input)
+                    status.write(f"Gerando textos para {len(selected)} produtos...")
+                    textos = generate_texts_in_batches(selected, tom_input)
                     
                     # Salvar no histórico
                     new_entries = []
                     for i, p in enumerate(selected):
-                        txt = textos[i] if i < len(textos) else "Erro ao gerar texto."
+                        txt = textos[i] if i < len(textos) else "⚠️ Erro na geração."
                         new_entries.append({
                             "name": p['productName'],
                             "price": p['priceMin'],
@@ -291,11 +296,11 @@ with st.container():
                         })
                     
                     st.session_state.history = new_entries + st.session_state.history
-                    status.update(label=f"Sucesso! {len(selected)} ofertas geradas.", state="complete", expanded=False)
+                    status.update(label=f"Pronto! {len(selected)} ofertas adicionadas.", state="complete", expanded=False)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Exibição do Histórico/Resultados
+# Exibição do Histórico
 if st.session_state.history:
     st.subheader(f"✨ Últimas Ofertas ({len(st.session_state.history)})")
     
@@ -308,20 +313,22 @@ if st.session_state.history:
         with st.container():
             st.markdown(f"""
                 <div class='card'>
-                    <div style='display: flex; justify-content: space-between;'>
-                        <span class='shopee-orange'>{item['name'][:50]}...</span>
-                        <span class='discount-badge'>{item['discount']}% OFF</span>
-                    </div>
-                    <div style='margin-top: 10px;'>
-                        <span class='price-tag'>R$ {item['price']}</span> 
-                        <span style='color: #888; font-size: 0.8em;'>• {item['origin']}</span>
+                    <div style='display: flex; justify-content: space-between; align-items: start;'>
+                        <div style='flex: 1; padding-right: 10px;'>
+                            <div class='shopee-orange' style='font-size: 1.1em;'>{item['name'][:60]}...</div>
+                            <div style='margin-top: 8px;'>
+                                <span class='price-tag'>R$ {item['price']}</span> 
+                                <span style='color: #888; font-size: 0.8em; margin-left: 10px;'>• {item['origin']}</span>
+                            </div>
+                        </div>
+                        <div class='discount-badge' style='white-space: nowrap;'>{item['discount']}% OFF</div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
             
             # Área de texto para copiar
             st.code(item['text'], language="text")
-            st.markdown("---")
+            st.markdown("<div style='margin-bottom: 30px;'></div>", unsafe_allow_html=True)
 else:
     st.info("Nada por aqui ainda. Ajuste os filtros e clique em **Gerar Novas Ofertas**! ✨")
     
