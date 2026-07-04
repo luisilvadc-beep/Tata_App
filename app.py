@@ -115,18 +115,11 @@ Responda SOMENTE com JSON válido sem markdown:
 A ordem deve ser a mesma dos produtos recebidos."""
 
     genai.configure(api_key=GEMINI_API_KEY)
-    
+    model = genai.GenerativeModel('gemini-1.5-flash')
     prompt_completo = f"{SYSTEM_PROMPT}\n\n{build_prompt(products)}"
     
-    # Sistema de Fallback: Tenta a rota atualizada, se falhar, usa a rota universal
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         response = model.generate_content(prompt_completo)
-    except Exception:
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(prompt_completo)
-    
-    try:
         raw = response.text
         cleaned = raw.replace("```json", "").replace("```", "").strip()
         cleaned = "".join(c for c in cleaned if ord(c) >= 32 or c in "\n\r\t")
@@ -136,14 +129,14 @@ A ordem deve ser a mesma dos produtos recebidos."""
         
         return [r.replace("\\n", "\n") for r in results]
     except Exception as e:
-        raise RuntimeError(f"Erro na limpeza do texto gerado: {str(e)}")
+        raise RuntimeError(f"Erro na geração: {str(e)}")
 
 # --- Interface de Usuário (UI) ---
 st.title("🛍️ Gerador de Ofertas Shopee")
 st.write("Busque os melhores produtos e gere os textos para o WhatsApp automaticamente.")
 
 keywords_input = st.text_area("Categorias (uma por linha):", "cozinha\ndecoração casa\nmoda feminina")
-tom_input = st.text_input("Tom das frases de abertura (Ex: Animado, Urgente, Foco em economia):", "Animado e focado em economia, como se estivesse contando um segredo para uma amiga")
+tom_input = st.text_input("Tom das frases de abertura:", "Animado e focado em economia, como se estivesse contando um segredo para uma amiga")
 
 if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
     keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
@@ -182,4 +175,5 @@ if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
                         st.text(texto_formatado)
                         st.code(texto_formatado, language="text")
             except Exception as e:
-                st.error(f"❌ Erro na geração de texto: {e}")
+                st.error(f"❌ Erro na IA: {e}")
+                
