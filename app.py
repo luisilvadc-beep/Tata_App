@@ -115,8 +115,8 @@ A ordem deve ser a mesma dos produtos recebidos."""
 
     prompt_completo = f"{SYSTEM_PROMPT}\n\n{build_prompt(products)}"
     
-    # Fazendo a requisição HTTP direta, ignorando a biblioteca com erro
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # A ÚNICA ALTERAÇÃO FOI AQUI: gemini-pro em vez de gemini-1.5-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     payload = {
         "contents": [{"parts": [{"text": prompt_completo}]}]
@@ -125,13 +125,11 @@ A ordem deve ser a mesma dos produtos recebidos."""
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=30)
         
-        # Se der erro HTTP, captura a mensagem real do Google para debug
         if not r.ok:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
             
         data = r.json()
         
-        # Navega no JSON de resposta do Gemini
         raw = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
         
         if not raw:
@@ -193,3 +191,4 @@ if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
                         st.code(texto_formatado, language="text")
             except Exception as e:
                 st.error(f"❌ Erro: {e}")
+
