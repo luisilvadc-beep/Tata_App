@@ -133,7 +133,7 @@ def search_products(keyword, limit=50):
     return []
 
 def classify_origin(product_name, shop_name):
-    china_terms = ['china', 'internacional', 'cross-border', 'envio internacional', 'importado', 'ltd', 'shenzhen', 'guangzhou']
+    china_terms = ['china', 'internacional', 'cross-border', 'envio internacional', 'importado', 'ltd', 'shenzhen', 'guangzhou', 'oficial store china']
     text = f"{product_name} {shop_name}".lower()
     if any(term in text for term in china_terms):
         return "IMPORTADO"
@@ -168,21 +168,19 @@ def filter_and_pick(products, target_count, origin_filter, min_discount, min_com
     
     return selected
 
-# --- Funções IA (Gemini) ---
+# --- Funções IA (Gemini API Nativa) ---
 def sanitize_text(text):
     if not text: return ""
-    # Remove caracteres de controle e sanitiza aspas
     text = re.sub(r'[\x00-\x1F\x7F]', '', text)
     return text.replace('"', "'").replace('\n', ' ').strip()
 
 def generate_texts_in_batches(products, tom_texto, batch_size=4):
-    """Gera textos em lotes menores para evitar erros de limite ou falhas no JSON da IA"""
     all_texts = []
     
     for i in range(0, len(products), batch_size):
         batch = products[i:i + batch_size]
         
-        SYSTEM_PROMPT = f"""Você é um copywriter especialista em Shopee para WhatsApp.
+        prompt = f"""Você é um copywriter especialista em Shopee para WhatsApp.
 Tom: {tom_texto}.
 Crie um post curto e chamativo para cada produto abaixo.
 
@@ -190,53 +188,48 @@ Regras:
 1. Use emojis.
 2. Formato: {{emoji}} {{frase}}\\n\\n✨ {{nome}}\\n\\n❌ {{desconto}}% OFF ❌\\n💰 R$ {{preço}}\\n\\n🔗 {{link}}
 3. Responda APENAS com um JSON no formato: {{"results": ["texto1", "texto2", ...]}}
-4. Use \\n para quebras de linha dentro das strings."""
+4. Use \\n para quebras de linha dentro das strings.
 
-        product_data = []
+Produtos:
+"""
         for idx, p in enumerate(batch, 1):
             name = sanitize_text(p['productName'])
             price = p['priceMin']
             disc = int(float(p['priceDiscountRate']))
             link = p['offerLink']
-            product_data.append(f"Prod {idx}: {name} | R${price} | {disc}% OFF | {link}")
+            prompt += f"Prod {idx}: {name} | R${price} | {disc}% OFF | {link}\n"
+
+        # URL da API Nativa do Gemini
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         
-        user_msg = "\n".join(product_data)
-        
-        url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {GEMINI_API_KEY}"
-        }
+        headers = {"Content-Type": "application/json"}
         payload = {
-            "model": "gemini-1.5-flash",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg}
-            ],
-            "temperature": 0.9
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.9,
+                "response_mime_type": "application/json"
+            }
         }
         
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=40)
             if r.ok:
                 res_json = r.json()
-                content = res_json["choices"][0]["message"]["content"]
+                # O Gemini retorna o conteúdo em 'candidates' -> 'content' -> 'parts'
+                content = res_json['candidates'][0]['content']['parts'][0]['text']
                 
-                # Extração robusta do JSON
-                match = re.search(r'\{.*\}', content, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
-                    batch_results = [t.replace('\\n', '\n') for t in data.get("results", [])]
-                    # Garantir que temos o mesmo número de textos que produtos no lote
-                    while len(batch_results) < len(batch):
-                        batch_results.append("⚠️ Erro ao gerar este texto específico.")
-                    all_texts.extend(batch_results[:len(batch)])
-                else:
-                    all_texts.extend(["⚠️ Erro: IA não retornou JSON."] * len(batch))
+                data = json.loads(content)
+                batch_results = [t.replace('\\n', '\n') for t in data.get("results", [])]
+                
+                while len(batch_results) < len(batch):
+                    batch_results.append("⚠️ Erro ao gerar este texto.")
+                all_texts.extend(batch_results[:len(batch)])
             else:
-                all_texts.extend([f"⚠️ Erro HTTP {r.status_code}"] * len(batch))
+                all_texts.extend([f"⚠️ Erro API {r.status_code}"] * len(batch))
         except Exception as e:
-            all_texts.extend([f"⚠️ Erro técnico: {str(e)[:30]}"] * len(batch))
+            all_texts.extend([f"⚠️ Erro: {str(e)[:20]}"] * len(batch))
             
     return all_texts
 
@@ -244,7 +237,6 @@ Regras:
 st.markdown("<h1 style='text-align: center;'>🛍️ Shopee Fácil</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #666;'>Curadoria automática, texto pronto para WhatsApp.</p>", unsafe_allow_html=True)
 
-# Layout Estilo Lovable (Cards)
 with st.container():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     
@@ -282,7 +274,6 @@ with st.container():
                     status.write(f"Gerando textos para {len(selected)} produtos...")
                     textos = generate_texts_in_batches(selected, tom_input)
                     
-                    # Salvar no histórico
                     new_entries = []
                     for i, p in enumerate(selected):
                         txt = textos[i] if i < len(textos) else "⚠️ Erro na geração."
@@ -300,7 +291,6 @@ with st.container():
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Exibição do Histórico
 if st.session_state.history:
     st.subheader(f"✨ Últimas Ofertas ({len(st.session_state.history)})")
     
@@ -326,7 +316,6 @@ if st.session_state.history:
                 </div>
             """, unsafe_allow_html=True)
             
-            # Área de texto para copiar
             st.code(item['text'], language="text")
             st.markdown("<div style='margin-bottom: 30px;'></div>", unsafe_allow_html=True)
 else:
