@@ -3,7 +3,7 @@ import time
 import json
 import hashlib
 import requests
-from groq import Groq
+import google.generativeai as genai
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="Gerador de Ofertas Shopee", page_icon="🛍️", layout="centered")
@@ -12,7 +12,7 @@ st.set_page_config(page_title="Gerador de Ofertas Shopee", page_icon="🛍️", 
 try:
     SHOPEE_APP_ID = st.secrets["SHOPEE_APP_ID"]
     SHOPEE_APP_SECRET = st.secrets["SHOPEE_APP_SECRET"]
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
     st.error("⚠️ Credenciais não configuradas. Adicione-as nos Secrets do Streamlit Cloud.")
     st.stop()
@@ -93,8 +93,10 @@ def build_prompt(products):
     for i, p in enumerate(products, start=1):
         price = p.get("priceMin")
         discount_pct = round(float(p.get("priceDiscountRate", 0)))
+        # Pequena sanitização para não quebrar a IA
+        safe_name = p['productName'].replace('"', "'").replace("\n", " ")
         lines.append(
-            f"{i}. Produto: {p['productName']} | Preco: R${price} | Desconto: {discount_pct}% | Link: {p['offerLink']}"
+            f"{i}. Produto: {safe_name} | Preco: R${price} | Desconto: {discount_pct}% | Link: {p['offerLink']}"
         )
     return "\n".join(lines)
 
@@ -113,16 +115,27 @@ Responda SOMENTE com JSON válido sem markdown:
 {{"results": ["texto1", "texto2"]}}
 A ordem deve ser a mesma dos produtos recebidos."""
 
-    client = Groq(api_key=GROQ_API_KEY)
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(products)},
-        ],
-    )
-    cleaned = response.choices[0].message.content.replace("```json", "").replace("```", "").strip()
-    return json.loads(cleaned).get("results", [])
+    # Configuração do Gemini
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    user_msg = build_prompt(products)
+    prompt_completo = f"{SYSTEM_PROMPT}\n\n{user_msg}"
+    
+    try:
+        response = model.generate_content(prompt_completo)
+        raw = response.text
+        
+        # Limpeza robusta do JSON (Remove crases do markdown e caracteres invisíveis)
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        cleaned = "".join(c for c in cleaned if ord(c) >= 32 or c in "\n\r\t")
+        
+        parsed = json.loads(cleaned)
+        results = parsed.get("results", [])
+        
+        return [r.replace("\\n", "\n") for r in results]
+    except Exception as e:
+        raise RuntimeError(f"Erro na IA do Google: {str(e)}")
 
 # --- Interface de Usuário (UI) ---
 st.title("🛍️ Gerador de Ofertas Shopee")
@@ -169,3 +182,4 @@ if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
                         st.code(texto_formatado, language="text")
             except Exception as e:
                 st.error(f"❌ Erro na geração de texto: {e}")
+                
