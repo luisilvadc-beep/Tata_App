@@ -115,11 +115,17 @@ A ordem deve ser a mesma dos produtos recebidos."""
 
     prompt_completo = f"{SYSTEM_PROMPT}\n\n{build_prompt(products)}"
     
-    # A ÚNICA ALTERAÇÃO FOI AQUI: gemini-pro em vez de gemini-1.5-flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-    headers = {'Content-Type': 'application/json'}
+    # Bypass: Usando a rota de compatibilidade OpenAI do Google
+    url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {GEMINI_API_KEY}"
+    }
     payload = {
-        "contents": [{"parts": [{"text": prompt_completo}]}]
+        "model": "gemini-1.5-flash",
+        "messages": [
+            {"role": "user", "content": prompt_completo}
+        ]
     }
     
     try:
@@ -129,12 +135,8 @@ A ordem deve ser a mesma dos produtos recebidos."""
             raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
             
         data = r.json()
+        raw = data["choices"][0]["message"]["content"]
         
-        raw = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-        
-        if not raw:
-            raise RuntimeError("A API não retornou texto.")
-            
         cleaned = raw.replace("```json", "").replace("```", "").strip()
         cleaned = "".join(c for c in cleaned if ord(c) >= 32 or c in "\n\r\t")
         
@@ -191,4 +193,4 @@ if st.button("🚀 Buscar e Gerar Textos", use_container_width=True):
                         st.code(texto_formatado, language="text")
             except Exception as e:
                 st.error(f"❌ Erro: {e}")
-
+                
